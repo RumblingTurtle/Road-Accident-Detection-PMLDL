@@ -15,8 +15,10 @@ from vision.ssd.mobilenetv1_ssd import create_mobilenetv1_ssd
 from vision.ssd.mobilenetv1_ssd_lite import create_mobilenetv1_ssd_lite
 from vision.ssd.mobilenet_v2_ssd_lite import create_mobilenetv2_ssd_lite
 from vision.ssd.squeezenet_ssd_lite import create_squeezenet_ssd_lite
+from vision.datasets.ev_dataset import EVDataset
 from vision.datasets.voc_dataset import VOCDataset
 from vision.datasets.open_images import OpenImagesDataset
+from vision.datasets.wider_people import WPDataset
 from vision.nn.multibox_loss import MultiboxLoss
 from vision.ssd.config import vgg_ssd_config
 from vision.ssd.config import mobilenetv1_ssd_config
@@ -30,10 +32,10 @@ parser.add_argument("--dataset_type", default="voc", type=str,
                     help='Specify dataset type. Currently support voc and open_images.')
 
 parser.add_argument('--datasets', nargs='+', help='Dataset directory path')
+parser.add_argument('--additional_dataset', type=str, help='Dataset directory path')
 parser.add_argument('--validation_dataset', help='Dataset directory path')
 parser.add_argument('--balance_data', action='store_true',
                     help="Balance training data by down-sampling more frequent labels.")
-
 
 parser.add_argument('--net', default="vgg16-ssd",
                     help="The network architecture, it can be mb1-ssd, mb1-lite-ssd, mb2-ssd-lite or vgg16-ssd.")
@@ -58,7 +60,6 @@ parser.add_argument('--base_net_lr', default=None, type=float,
                     help='initial learning rate for base net.')
 parser.add_argument('--extra_layers_lr', default=None, type=float,
                     help='initial learning rate for the layers not in base net and prediction heads.')
-
 
 # Params for loading pretrained basenet or checkpoints.
 parser.add_argument('--base_net',
@@ -96,7 +97,6 @@ parser.add_argument('--use_cuda', default=True, type=str2bool,
 parser.add_argument('--checkpoint_folder', default='models/',
                     help='Directory for saving checkpoint models')
 
-
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 args = parser.parse_args()
@@ -120,7 +120,11 @@ def train(loader, net, criterion, optimizer, device, debug_steps=100, epoch=-1):
 
         optimizer.zero_grad()
         confidence, locations = net(images)
-        regression_loss, classification_loss = criterion(confidence, locations, labels, boxes)  # TODO CHANGE BOXES
+        try:
+            regression_loss, classification_loss = criterion(confidence, locations, labels, boxes)  # TODO CHANGE BOXES
+        except RuntimeError:
+            print(f'ERROR: {i}')
+            continue
         loss = regression_loss + classification_loss
         loss.backward()
         optimizer.step()
@@ -149,21 +153,21 @@ def test(loader, net, criterion, device):
     running_regression_loss = 0.0
     running_classification_loss = 0.0
     num = 0
-    for _, data in enumerate(loader):
-        images, boxes, labels = data
-        images = images.to(device)
-        boxes = boxes.to(device)
-        labels = labels.to(device)
-        num += 1
+    data = next(iter(loader))
+    images, boxes, labels = data
+    images = images.to(device)
+    boxes = boxes.to(device)
+    labels = labels.to(device)
+    num += 1
 
-        with torch.no_grad():
-            confidence, locations = net(images)
-            regression_loss, classification_loss = criterion(confidence, locations, labels, boxes)
-            loss = regression_loss + classification_loss
+    with torch.no_grad():
+        confidence, locations = net(images)
+        regression_loss, classification_loss = criterion(confidence, locations, labels, boxes)
+        loss = regression_loss + classification_loss
 
-        running_loss += loss.item()
-        running_regression_loss += regression_loss.item()
-        running_classification_loss += classification_loss.item()
+    running_loss += loss.item()
+    running_regression_loss += regression_loss.item()
+    running_classification_loss += classification_loss.item()
     return running_loss / num, running_regression_loss / num, running_classification_loss / num
 
 
@@ -207,13 +211,25 @@ if __name__ == '__main__':
             num_classes = len(dataset.class_names)
         elif args.dataset_type == 'open_images':
             dataset = OpenImagesDataset(dataset_path,
-                 transform=train_transform, target_transform=target_transform,
-                 dataset_type="train", balance_data=args.balance_data)
+                                        transform=train_transform, target_transform=target_transform,
+                                        dataset_type="train", balance_data=args.balance_data)
             label_file = os.path.join(args.checkpoint_folder, "open-images-model-labels.txt")
             store_labels(label_file, dataset.class_names)
             logging.info(dataset)
             num_classes = len(dataset.class_names)
-
+        elif args.dataset_type == 'ev':
+            dataset = EVDataset(dataset_path, transform=train_transform,
+                                target_transform=target_transform)
+            logging.info(dataset)
+            label_file = os.path.join(args.checkpoint_folder, "ev-model-labels.txt")
+            store_labels(label_file, dataset.class_dict.keys())
+            num_classes = len(dataset.class_dict.keys())
+            add_dataset_path = args.additional_dataset
+            add_dataset = WPDataset(add_dataset_path, transform=train_transform,
+                                    target_transform=target_transform,
+                                    dataset_type="train")
+            dataset.merge(add_dataset)
+            logging.info(dataset)
         else:
             raise ValueError(f"Dataset type {args.dataset_type} is not supported.")
         datasets.append(dataset)
@@ -232,6 +248,12 @@ if __name__ == '__main__':
                                         transform=test_transform, target_transform=target_transform,
                                         dataset_type="test")
         logging.info(val_dataset)
+    elif args.dataset_type == 'ev':
+        val_dataset = EVDataset(dataset_path,
+                                transform=test_transform, target_transform=target_transform,
+                                dataset_type="test")
+        logging.info(val_dataset)
+
     logging.info("validation dataset size: {}".format(len(val_dataset)))
 
     val_loader = DataLoader(val_dataset, args.batch_size,
@@ -303,7 +325,7 @@ if __name__ == '__main__':
         logging.info("Uses MultiStepLR scheduler.")
         milestones = [int(v.strip()) for v in args.milestones.split(",")]
         scheduler = MultiStepLR(optimizer, milestones=milestones,
-                                                     gamma=0.1, last_epoch=last_epoch)
+                                gamma=0.1, last_epoch=last_epoch)
     elif args.scheduler == 'cosine':
         logging.info("Uses CosineAnnealingLR scheduler.")
         scheduler = CosineAnnealingLR(optimizer, args.t_max, last_epoch=last_epoch)
@@ -313,11 +335,14 @@ if __name__ == '__main__':
         sys.exit(1)
 
     logging.info(f"Start training from epoch {last_epoch + 1}.")
+    model_path = os.path.join(args.checkpoint_folder, f"{args.net}-no-training.pth")
+    net.save(model_path)
+    logging.info(f"Saved model {model_path}")
     for epoch in range(last_epoch + 1, args.num_epochs):
-        scheduler.step()
         train(train_loader, net, criterion, optimizer,
               device=DEVICE, debug_steps=args.debug_steps, epoch=epoch)
-        
+        scheduler.step()
+
         if epoch % args.validation_epochs == 0 or epoch == args.num_epochs - 1:
             val_loss, val_regression_loss, val_classification_loss = test(val_loader, net, criterion, DEVICE)
             logging.info(

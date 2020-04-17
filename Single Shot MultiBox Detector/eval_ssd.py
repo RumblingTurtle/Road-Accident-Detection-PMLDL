@@ -5,6 +5,8 @@ from vision.ssd.mobilenetv1_ssd_lite import create_mobilenetv1_ssd_lite, create_
 from vision.ssd.squeezenet_ssd_lite import create_squeezenet_ssd_lite, create_squeezenet_ssd_lite_predictor
 from vision.datasets.voc_dataset import VOCDataset
 from vision.datasets.open_images import OpenImagesDataset
+from vision.datasets.ev_dataset import EVDataset
+from vision.datasets.wider_people import WPDataset
 from vision.utils import box_utils, measurements
 from vision.utils.misc import str2bool, Timer
 import argparse
@@ -23,6 +25,7 @@ parser.add_argument("--trained_model", type=str)
 parser.add_argument("--dataset_type", default="voc", type=str,
                     help='Specify dataset type. Currently support voc and open_images.')
 parser.add_argument("--dataset", type=str, help="The root directory of the VOC dataset or Open Images dataset.")
+parser.add_argument('--additional_dataset', type=str, help='Dataset directory path')
 parser.add_argument("--label_file", type=str, help="The label file path.")
 parser.add_argument("--use_cuda", type=str2bool, default=True)
 parser.add_argument("--use_2007_metric", type=str2bool, default=True)
@@ -65,7 +68,7 @@ def group_annotation_by_class(dataset):
             all_gt_boxes[class_index][image_id] = torch.stack(all_gt_boxes[class_index][image_id])
     for class_index in all_difficult_cases:
         for image_id in all_difficult_cases[class_index]:
-            all_gt_boxes[class_index][image_id] = torch.tensor(all_gt_boxes[class_index][image_id])
+            all_gt_boxes[class_index][image_id] = all_gt_boxes[class_index][image_id].clone().detach()
     return true_case_stat, all_gt_boxes, all_difficult_cases
 
 
@@ -129,6 +132,12 @@ if __name__ == '__main__':
         dataset = VOCDataset(args.dataset, is_test=True)
     elif args.dataset_type == 'open_images':
         dataset = OpenImagesDataset(args.dataset, dataset_type="test")
+    elif args.dataset_type == 'ev':
+        dataset = EVDataset(args.dataset, dataset_type="test")
+        add_dataset_path = args.additional_dataset
+        add_dataset = WPDataset(add_dataset_path, dataset_type="val")
+        dataset.merge(add_dataset)
+        print(dataset.__repr__())
 
     true_case_stat, all_gb_boxes, all_difficult_cases = group_annotation_by_class(dataset)
     if args.net == 'vgg16-ssd':
@@ -191,7 +200,7 @@ if __name__ == '__main__':
                 prob_box = sub[i, 2:].numpy()
                 image_id = dataset.ids[int(sub[i, 0])]
                 print(
-                    image_id + " " + " ".join([str(v) for v in prob_box]),
+                    str(image_id) + " " + " ".join([str(v) for v in prob_box]),
                     file=f
                 )
     aps = []
