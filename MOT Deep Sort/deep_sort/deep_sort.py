@@ -8,7 +8,8 @@ from .sort.detection import Detection
 from .sort.tracker import Tracker
 
 __all__ = ['DeepSort']
-NEAR_MISS = 1
+NORMAL = 0
+MOVE = 1
 COLLISION = 2
 
 
@@ -124,14 +125,15 @@ class DeepSort(object):
             avg_acc[0] /= lim - 1
             avg_acc[1] /= lim - 1
         threshold = (abs(sign_x * abs(track.acc[0] - avg_acc[0])), abs(sign_y * (track.acc[1] - avg_acc[1])))
-        print(threshold)
         if threshold[0] > 4 or threshold[1] >= 3:
-            track.collision_status = NEAR_MISS
+            track.collision_status = MOVE
             for t in self.tracker.tracks:
                 if track.track_id == t.track_id:
                     continue
                 if self.intersect(track.to_tlbr(), t.to_tlbr()):
                     print(f'Collision between {track.track_id} and {t.track_id}')
-                    if t.collision_status == NEAR_MISS:
+                    if t.collision_status == MOVE:
                         track.collision_status = COLLISION
                         t.collision_status = COLLISION
+        else:
+            track.collision_status = NORMAL

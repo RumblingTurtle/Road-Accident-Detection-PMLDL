@@ -22,14 +22,13 @@ def draw_boxes(img, bbox, collision_statuses, identities=None, offset=(0, 0)):
         # box text and bar
         id = int(identities[i]) if identities is not None else 0
         cs = collision_statuses[i]
+        color = compute_color_for_labels(id)
         if cs == 2:
             color = (0, 0, 255)
             label = ' COLLISION'
         elif cs == 1:
-            color = (0, 255, 255)
-            label = ' NEAR MISS'
+            label = ' MOVES'
         else:
-            color = compute_color_for_labels(id)
             label = ''
         label = '{}{:d}'.format("", id) + label
         t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 2, 2)[0]
