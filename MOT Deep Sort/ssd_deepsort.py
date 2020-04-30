@@ -80,8 +80,9 @@ class VideoTracker(object):
                 # draw boxes for visualization
                 if len(outputs) > 0:
                     bbox_xyxy = outputs[:, :4]
+                    collision_statuses = outputs[:, -2]
                     identities = outputs[:, -1]
-                    ori_im = draw_boxes(ori_im, bbox_xyxy, identities)
+                    ori_im = draw_boxes(ori_im, bbox_xyxy, collision_statuses, identities)
 
             end = time.time()
             print("time: {:.03f}s, fps: {:.03f}".format(end - start, 1 / (end - start)))

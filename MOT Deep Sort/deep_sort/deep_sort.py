@@ -8,6 +8,9 @@ from .sort.detection import Detection
 from .sort.tracker import Tracker
 
 __all__ = ['DeepSort']
+NORMAL = 0
+MOVE = 1
+COLLISION = 2
 
 
 class DeepSort(object):
@@ -49,7 +52,10 @@ class DeepSort(object):
             box = track.to_tlwh()
             x1, y1, x2, y2 = self._tlwh_to_xyxy(box)
             track_id = track.track_id
-            outputs.append(np.array([x1, y1, x2, y2, track_id], dtype=np.int))
+            collision_status = track.collision_status
+            outputs.append(np.array([x1, y1, x2, y2, collision_status, track_id], dtype=np.int))
+            if len(track.acc_q) > 2:
+                self.detect_collision(track)
         if len(outputs) > 0:
             outputs = np.stack(outputs, axis=0)
         return outputs
@@ -96,3 +102,38 @@ class DeepSort(object):
         else:
             features = np.array([])
         return features
+
+    @staticmethod
+    def intersect(box_a, box_b):
+        x_overlap = box_a[2] >= box_b[0] and box_b[2] >= box_a[0]
+        y_overlap = box_a[3] >= box_b[1] and box_b[3] >= box_a[1]
+        return x_overlap and y_overlap
+
+    def detect_collision(self, track):
+        vel_q = track.vel_q
+        acc_q = track.acc_q
+        sign_x = 1 if (vel_q[0][0] > 0 - vel_q[0][0] < 0) == (acc_q[0][0] > 0 - acc_q[0][0] < 0) else -1
+        sign_y = 1 if (vel_q[0][1] > 0 - vel_q[0][1] < 0) == (acc_q[0][1] > 0 - acc_q[0][1] < 0) else -1
+        avg_acc = [0, 0]
+        if len(acc_q) > 1:
+            lim = min(len(acc_q), 3)
+            for i in range(1, lim):
+                sign_x_i = 1 if (vel_q[i][0] > 0 - vel_q[i][0] < 0) == (acc_q[i][0] > 0 - acc_q[i][0] < 0) else -1
+                sign_y_i = 1 if (vel_q[i][1] > 0 - vel_q[i][1] < 0) == (acc_q[i][1] > 0 - acc_q[i][1] < 0) else -1
+                avg_acc[0] += sign_x_i * abs(acc_q[i][0])
+                avg_acc[1] += sign_y_i * abs(acc_q[i][1])
+            avg_acc[0] /= lim - 1
+            avg_acc[1] /= lim - 1
+        threshold = (abs(sign_x * abs(track.acc[0] - avg_acc[0])), abs(sign_y * (track.acc[1] - avg_acc[1])))
+        if threshold[0] > 4 or threshold[1] >= 3:
+            track.collision_status = MOVE
+            for t in self.tracker.tracks:
+                if track.track_id == t.track_id:
+                    continue
+                if self.intersect(track.to_tlbr(), t.to_tlbr()):
+                    print(f'Collision between {track.track_id} and {t.track_id}')
+                    if t.collision_status == MOVE:
+                        track.collision_status = COLLISION
+                        t.collision_status = COLLISION
+        else:
+            track.collision_status = NORMAL
